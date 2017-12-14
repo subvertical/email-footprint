@@ -1,0 +1,3 @@
+# disable checks for missing top-level documentation of classes and modules
+Style/Documentation:
+  Enabled: False

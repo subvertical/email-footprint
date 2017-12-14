@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'EmailFootprint Resources'
+Parameters:
+  EnvironmentVersion:
+    Type: String
+    Default: build-v1
+    Description: Enter the environment and its version.
+Resources:
+  EmailFootprintSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        -
+          Endpoint: !Sub ${EmailFootprintQueue.Arn}
+          Protocol: 'sqs'
+      TopicName: !Join [ '-', [ 'email-footprint', !Ref EnvironmentVersion ] ]
+  # TODO: Add encryption (KmsMasterKeyId)
+  EmailFootprintQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !Sub ${EmailFootprintDeadLetterQueue.Arn}
+        maxReceiveCount: 10
+  EmailFootprintDeadLetterQueue:
+    Type: AWS::SQS::Queue
+  EmailFootprintQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Id: EmailFootprintQueuePolicy
+          Statement:
+          - Sid: EmailFootprintQueuePolicySid
+            Effect: Allow
+            Action: SQS:*
+            Principal: '*'
+            Resource: '*'
+        Queues:
+        - !Ref EmailFootprintQueue
+        - !Ref EmailFootprintDeadLetterQueue
+  EmailFootprintConsumerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: sqs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:ReceiveMessage
+            Resource: !Sub ${EmailFootprintQueue.Arn}
+      - PolicyName: lambda
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: !Sub ${EmailFootprintWorkerLambda.Arn}
+  EmailFootprintConsumerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumer
+      Handler: index.handler
+      MemorySize: 128
+      Role: !Sub ${EmailFootprintConsumerLambdaRole.Arn}
+      Runtime: nodejs6.10
+      Timeout: 60
+      Environment:
+        Variables:
+          EVENTS_QUEUE_URL: !Ref EmailFootprintQueue
+          WORKER_LAMBDA_NAME: !Ref EmailFootprintWorkerLambda
+      Events:
+        Timer:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+  EmailFootprintWorkerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: sqs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:DeleteMessage
+            Resource: !Sub ${EmailFootprintQueue.Arn}
+      - PolicyName: dynamodb
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:DeleteItem
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:Scan
+            - dynamodb:UpdateItem
+            Resource: arn:aws:dynamodb:*:*:table/*
+  EmailFootprintWorkerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./worker
+      Handler: index.handler
+      MemorySize: 128
+      Role: !Sub ${EmailFootprintWorkerLambdaRole.Arn}
+      Runtime: nodejs6.10
+      Timeout: 60
+      Environment:
+        Variables:
+          EVENTS_QUEUE_URL: !Ref EmailFootprintQueue
+          EVENTS_TABLE: !Ref EventsDDBTable
+          CAMPAIGNS_TABLE: !Ref CampaignsDDBTable
+  EmailFootprintDDBScalingRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        -
+          PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: 'Allow'
+                Action:
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:UpdateTable'
+                  - 'cloudwatch:PutMetricAlarm'
+                  - 'cloudwatch:DescribeAlarms'
+                  - 'cloudwatch:GetMetricStatistics'
+                  - 'cloudwatch:SetAlarmState'
+                  - 'cloudwatch:DeleteAlarms'
+                Resource: '*'
+  EventsDDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'UUID'
+          AttributeType: 'S'
+        -
+          AttributeName: 'CampaignId'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'UUID'
+          KeyType: 'HASH'
+      GlobalSecondaryIndexes:
+        -
+          IndexName: 'CampaignsGSI'
+          KeySchema:
+            -
+              AttributeName: 'CampaignId'
+              KeyType: 'HASH'
+          Projection:
+            ProjectionType: 'ALL'
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      Tags:
+      - Key: Application
+        Value: !Ref AWS::StackName
+  EventsDDBTableWriteCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EventsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  EventsDDBTableReadCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EventsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  EventsDDBTableWriteScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EventsDDBTableWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  EventsDDBTableReadScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EventsDDBTableReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  CampaignsGSIWriteCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EventsDDBTable
+          - index
+          - CampaignsGSI
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  CampaignsGSIReadCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EventsDDBTable
+          - index
+          - CampaignsGSI
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  CampaignsGSIWriteScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref CampaignsGSIWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  CampaignsGSIReadScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref CampaignsGSIReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  CampaignsDDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'CampaignId'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'CampaignId'
+          KeyType: 'HASH'
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      Tags:
+      - Key: Application
+        Value: !Ref AWS::StackName
+  CampaignsDDBTableWriteCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref CampaignsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  CampaignsDDBTableReadCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref CampaignsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  CampaignsDDBTableWriteScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref CampaignsDDBTableWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  CampaignsDDBTableReadScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref CampaignsDDBTableReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  EmailsDDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'CampaignId'
+          AttributeType: 'S'
+        -
+          AttributeName: 'Recipient'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'CampaignId'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'Recipient'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      Tags:
+      - Key: Application
+        Value: !Ref AWS::StackName
+  EmailsDDBTableWriteCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EmailsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  EmailsDDBTableReadCapacityScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 1000
+      MinCapacity: 5
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref EmailsDDBTable
+      RoleARN: !GetAtt EmailFootprintDDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  EmailsDDBTableWriteScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EmailsDDBTableWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  EmailsDDBTableReadScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EmailsDDBTableReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
