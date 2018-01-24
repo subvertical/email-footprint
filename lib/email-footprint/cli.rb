@@ -77,6 +77,7 @@ module EmailFootprint
       puts "Send:\t\t#{campaign['Send'].to_i}"
       puts "Click:\t\t#{campaign['Click'].to_i}"
       puts "Delivery:\t#{campaign['Delivery'].to_i}"
+      puts "Bounce:\t\t#{campaign['Bounce'].to_i}"
     end
 
     desc 'store_email', 'Store email body'
