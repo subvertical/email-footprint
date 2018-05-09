@@ -15,6 +15,22 @@ Resources:
           Endpoint: !Sub ${EmailFootprintQueue.Arn}
           Protocol: 'sqs'
       TopicName: !Join [ '-', [ 'email-footprint', !Ref EnvironmentVersion ] ]
+  EmailFootprintBouncesSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        -
+          Endpoint: !Sub ${EmailFootprintBouncesQueue.Arn}
+          Protocol: 'sqs'
+      TopicName: !Join [ '-', [ 'email-footprint', 'Bounces', !Ref EnvironmentVersion ] ]
+  EmailFootprintComplaintsSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        -
+          Endpoint: !Sub ${EmailFootprintComplaintsQueue.Arn}
+          Protocol: 'sqs'
+      TopicName: !Join [ '-', [ 'email-footprint', 'Complaints', !Ref EnvironmentVersion ] ]
   # TODO: Add encryption (KmsMasterKeyId)
   EmailFootprintQueue:
     Type: AWS::SQS::Queue
@@ -23,7 +39,25 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !Sub ${EmailFootprintDeadLetterQueue.Arn}
         maxReceiveCount: 10
+  EmailFootprintBouncesQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !Sub ${EmailFootprintBouncesDeadLetterQueue.Arn}
+        maxReceiveCount: 10
+  EmailFootprintComplaintsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !Sub ${EmailFootprintComplaintsDeadLetterQueue.Arn}
+        maxReceiveCount: 10
   EmailFootprintDeadLetterQueue:
+    Type: AWS::SQS::Queue
+  EmailFootprintBouncesDeadLetterQueue:
+    Type: AWS::SQS::Queue
+  EmailFootprintComplaintsDeadLetterQueue:
     Type: AWS::SQS::Queue
   EmailFootprintQueuePolicy:
       Type: AWS::SQS::QueuePolicy
@@ -40,6 +74,10 @@ Resources:
         Queues:
         - !Ref EmailFootprintQueue
         - !Ref EmailFootprintDeadLetterQueue
+        - !Ref EmailFootprintBouncesQueue
+        - !Ref EmailFootprintBouncesDeadLetterQueue
+        - !Ref EmailFootprintComplaintsQueue
+        - !Ref EmailFootprintComplaintsDeadLetterQueue
   EmailFootprintConsumerLambdaRole:
     Type: AWS::IAM::Role
     Properties:
