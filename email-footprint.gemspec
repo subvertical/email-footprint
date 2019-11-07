@@ -5,7 +5,7 @@ require 'email-footprint/version'
 
 Gem::Specification.new do |spec|
   spec.name          = 'email-footprint'
-  spec.version       = EmailFootprint::VERSION
+  spec.version       = EmailFootprint::VERSION.dup
   spec.authors       = ['Subvertical LLC']
   spec.email         = ['developers@verticalchange.com']
 
