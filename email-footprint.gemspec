@@ -1,11 +1,10 @@
 # coding: utf-8
 lib = File.expand_path('../lib', __FILE__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
-require 'email-footprint/version'
 
 Gem::Specification.new do |spec|
   spec.name          = 'email-footprint'
-  spec.version       = EmailFootprint::VERSION.dup
+  spec.version       = '1.0.0'
   spec.authors       = ['Subvertical LLC']
   spec.email         = ['developers@verticalchange.com']
 
