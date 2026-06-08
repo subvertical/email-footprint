@@ -1,5 +1,3 @@
-require 'aws-sdk'
-
 module EmailFootprint
   class EventsTable < Database
     attr_reader :results

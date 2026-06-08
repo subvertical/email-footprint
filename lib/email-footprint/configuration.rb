@@ -1,4 +1,4 @@
-require 'active_support'
+require 'active_support/core_ext/class'
 
 module EmailFootprint
   def self.configuration
@@ -10,15 +10,13 @@ module EmailFootprint
   end
 
   class Configuration
-    include ActiveSupport::Configurable
-
-    config_accessor(:aws_region) { 'us-west-2' }
-    config_accessor(:access_key_id)
-    config_accessor(:secret_access_key)
-    config_accessor(:ses_configuration_set)
-    config_accessor(:campaigns_table)
-    config_accessor(:emails_table)
-    config_accessor(:events_table)
-    config_accessor(:events_campaigns_index_name)
+    class_attribute :aws_region, default: 'us-west-2'
+    class_attribute :access_key_id
+    class_attribute :secret_access_key
+    class_attribute :ses_configuration_set
+    class_attribute :campaigns_table
+    class_attribute :emails_table
+    class_attribute :events_table
+    class_attribute :events_campaigns_index_name
   end
 end

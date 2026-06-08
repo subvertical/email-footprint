@@ -1,5 +1,3 @@
-require 'aws-sdk'
-
 module EmailFootprint
   class AwsCommon
     def self.initialization_options
